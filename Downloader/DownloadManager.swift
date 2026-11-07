@@ -75,13 +75,26 @@ final class DownloadManager: ObservableObject {
             guard let url = URL(string: line), let scheme = url.scheme?.lowercased(),
                   scheme == "http" || scheme == "https", url.host != nil else { invalid += 1; continue }
             var name = ""
+            var isCustom = false
             if lines.count == 1 && !customFilename.trimmingCharacters(in: .whitespaces).isEmpty {
                 name = sanitizeFilename(customFilename)
+                isCustom = true
             } else {
                 name = sanitizeFilename(url.lastPathComponent.removingPercentEncoding ?? url.lastPathComponent)
             }
             name = uniqueFilename(name)
-            items.insert(DownloadItem(urlString: line, filename: name), at: 0)
+            var item = DownloadItem(urlString: line, filename: name)
+            item.customName = isCustom
+            // Debrid routing: a link whose host is supported by a
+            // service the user has tested and verified is fetched
+            // through that service instead of directly.
+            if let host = url.host, let service = DebridStore.shared.service(forHost: host) {
+                item.viaDebrid = service.displayName
+                item.debridService = service.rawValue
+                item.originalURLString = line
+                item.debridResolved = false
+            }
+            items.insert(item, at: 0)
             added += 1
         }
         if added > 0 { saveState(); schedule() }
@@ -118,6 +131,15 @@ final class DownloadManager: ObservableObject {
     func resume(_ item: DownloadItem) {
         guard let idx = items.firstIndex(where: { $0.id == item.id }) else { return }
         if items[idx].status == .completed { return }
+        // A debrid item re-resolves on resume: direct links expire, so
+        // a previously resolved item starts again from its hoster link.
+        if items[idx].debridService != nil, items[idx].debridResolved == true,
+           let original = items[idx].originalURLString {
+            items[idx].urlString = original
+            items[idx].debridResolved = false
+            items[idx].probed = false
+            items[idx].segments = []
+        }
         items[idx].status = .queued
         items[idx].errorMessage = nil
         saveState()
@@ -140,6 +162,13 @@ final class DownloadManager: ObservableObject {
     func pauseAll() { for item in items where item.status == .downloading || item.status == .queued { pause(item) } }
     func resumeAll() {
         for i in items.indices where items[i].status == .paused || items[i].status == .failed {
+            if items[i].debridService != nil, items[i].debridResolved == true,
+               let original = items[i].originalURLString {
+                items[i].urlString = original
+                items[i].debridResolved = false
+                items[i].probed = false
+                items[i].segments = []
+            }
             items[i].status = .queued; items[i].errorMessage = nil
         }
         saveState(); schedule()
@@ -167,12 +196,65 @@ final class DownloadManager: ObservableObject {
         guard let idx = items.firstIndex(where: { $0.id == item.id }), runners[item.id] == nil else { return }
         items[idx].status = .downloading
         let current = items[idx]
-        if !current.probed {
+        if current.debridService != nil && current.debridResolved != true {
+            Task { await resolveDebridAndStart(current) }
+        } else if !current.probed {
             Task { await probeAndStart(current) }
         } else {
             startRunner(current)
         }
         updateIdleTimer()
+    }
+
+    /// Resolves a debrid-routed item's hoster link to direct link(s)
+    /// through its service, then hands over to the normal probe/start.
+    /// Any debrid failure falls back to downloading the hoster link
+    /// directly, so the download is never worse off.
+    private func resolveDebridAndStart(_ item: DownloadItem) async {
+        guard let serviceID = DebridServiceID(rawValue: item.debridService ?? ""),
+              let original = URL(string: item.originalURLString ?? item.urlString) else {
+            await probeAndStart(item); return
+        }
+        guard let idx = items.firstIndex(where: { $0.id == item.id }) else { return }
+        items[idx].debridPhase = "Fetching via \(serviceID.displayName)"
+        saveState()
+        do {
+            let files = try await DebridStore.shared.resolve(url: original, service: serviceID)
+            guard let idx = items.firstIndex(where: { $0.id == item.id }),
+                  items[idx].status == .downloading else { return } // paused meanwhile
+            items[idx].debridPhase = nil
+            guard let first = files.first else { throw DebridError.message("No files returned.") }
+            items[idx].urlString = first.directURL.absoluteString
+            if items[idx].customName != true, let fn = first.filename, !fn.isEmpty {
+                items[idx].filename = uniqueFilename(sanitizeFilename(fn))
+            }
+            items[idx].debridResolved = true
+            // Extra files in the same link become their own items,
+            // already resolved.
+            for extra in files.dropFirst() {
+                var extraItem = DownloadItem(
+                    urlString: extra.directURL.absoluteString,
+                    filename: uniqueFilename(sanitizeFilename(extra.filename ?? extra.directURL.lastPathComponent)))
+                extraItem.viaDebrid = serviceID.displayName
+                extraItem.debridService = serviceID.rawValue
+                extraItem.originalURLString = item.originalURLString
+                extraItem.debridResolved = true
+                items.insert(extraItem, at: idx)
+            }
+            saveState()
+            await probeAndStart(items[idx])
+            schedule()
+        } catch {
+            guard let idx = items.firstIndex(where: { $0.id == item.id }),
+                  items[idx].status == .downloading else { return }
+            items[idx].debridPhase = nil
+            items[idx].viaDebrid = nil
+            items[idx].debridService = nil
+            items[idx].originalURLString = nil
+            items[idx].debridResolved = nil
+            saveState()
+            await probeAndStart(items[idx])
+        }
     }
 
     private func probeAndStart(_ item: DownloadItem) async {

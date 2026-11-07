@@ -13,6 +13,9 @@
 		E00000000000000000000004 /* DownloadManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000004 /* DownloadManager.swift */; };
 		E00000000000000000000005 /* SegmentedDownloader.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000005 /* SegmentedDownloader.swift */; };
 		E00000000000000000000006 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000006 /* SettingsView.swift */; };
+		E00000000000000000000007 /* BrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000007 /* BrowserView.swift */; };
+		E00000000000000000000009 /* Debrid.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000009 /* Debrid.swift */; };
+		E00000000000000000000013 /* adblock-rules.json in Resources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000013 /* adblock-rules.json */; };
 		E00000000000000000000008 /* AppIcon60x60@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000008 /* AppIcon60x60@2x.png */; };
 		E00000000000000000000011 /* AppIcon60x60@3x.png in Resources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000011 /* AppIcon60x60@3x.png */; };
 		E00000000000000000000012 /* AppIcon1024.png in Resources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000012 /* AppIcon1024.png */; };
@@ -25,6 +28,9 @@
 		D00000000000000000000004 /* DownloadManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadManager.swift; sourceTree = "<group>"; };
 		D00000000000000000000005 /* SegmentedDownloader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SegmentedDownloader.swift; sourceTree = "<group>"; };
 		D00000000000000000000006 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		D00000000000000000000007 /* BrowserView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserView.swift; sourceTree = "<group>"; };
+		D00000000000000000000009 /* Debrid.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Debrid.swift; sourceTree = "<group>"; };
+		D00000000000000000000013 /* adblock-rules.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "adblock-rules.json"; sourceTree = "<group>"; };
 		D00000000000000000000008 /* AppIcon60x60@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "AppIcon60x60@2x.png"; sourceTree = "<group>"; };
 		D00000000000000000000011 /* AppIcon60x60@3x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "AppIcon60x60@3x.png"; sourceTree = "<group>"; };
 		D00000000000000000000012 /* AppIcon1024.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = AppIcon1024.png; sourceTree = "<group>"; };
@@ -60,6 +66,9 @@
 				D00000000000000000000004 /* DownloadManager.swift */,
 				D00000000000000000000005 /* SegmentedDownloader.swift */,
 				D00000000000000000000006 /* SettingsView.swift */,
+				D00000000000000000000007 /* BrowserView.swift */,
+				D00000000000000000000009 /* Debrid.swift */,
+				D00000000000000000000013 /* adblock-rules.json */,
 				D00000000000000000000010 /* Info.plist */,
 				D00000000000000000000008 /* AppIcon60x60@2x.png */,
 				D00000000000000000000011 /* AppIcon60x60@3x.png */,
@@ -137,6 +146,7 @@
 				E00000000000000000000008 /* AppIcon60x60@2x.png in Resources */,
 				E00000000000000000000011 /* AppIcon60x60@3x.png in Resources */,
 				E00000000000000000000012 /* AppIcon1024.png in Resources */,
+				E00000000000000000000013 /* adblock-rules.json in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -153,6 +163,8 @@
 				E00000000000000000000004 /* DownloadManager.swift in Sources */,
 				E00000000000000000000005 /* SegmentedDownloader.swift in Sources */,
 				E00000000000000000000006 /* SettingsView.swift in Sources */,
+				E00000000000000000000007 /* BrowserView.swift in Sources */,
+				E00000000000000000000009 /* Debrid.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -181,7 +193,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = QD29U585ZA;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Downloader/Info.plist;
@@ -189,7 +201,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0.0;
+				MARKETING_VERSION = 1.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.c12n.downloadmanager;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
@@ -205,7 +217,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = QD29U585ZA;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Downloader/Info.plist;
@@ -213,7 +225,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0.0;
+				MARKETING_VERSION = 1.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.c12n.downloadmanager;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;

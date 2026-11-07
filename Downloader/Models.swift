@@ -26,6 +26,16 @@ struct DownloadItem: Identifiable, Codable {
     var supportsRanges: Bool = false
     var rangeFallbackTried: Bool = false
 
+    // Debrid routing (optional so state saved by 1.0.0 still decodes).
+    // When set, urlString starts as the hoster link; once resolved it
+    // is replaced by the direct link and debridResolved becomes true.
+    var viaDebrid: String? = nil        // display name, e.g. "TorBox"
+    var debridService: String? = nil    // DebridServiceID raw value
+    var originalURLString: String? = nil
+    var debridResolved: Bool? = nil
+    var debridPhase: String? = nil      // e.g. "Fetching via TorBox"
+    var customName: Bool? = nil         // filename came from the user
+
     // Transient (persisted but reset on load / not meaningful across launches)
     var speedBytesPerSec: Double = 0
     var etaSeconds: Double = -1
@@ -54,6 +64,12 @@ enum AppSettings {
     static var keepAwake: Bool {
         if UserDefaults.standard.object(forKey: keepAwakeKey) == nil { return true }
         return UserDefaults.standard.bool(forKey: keepAwakeKey)
+    }
+
+    static let adBlockKey = "browserAdBlock"
+    static var adBlockEnabled: Bool {
+        if UserDefaults.standard.object(forKey: adBlockKey) == nil { return true }
+        return UserDefaults.standard.bool(forKey: adBlockKey)
     }
 }
 

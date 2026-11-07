@@ -1,12 +1,19 @@
 import SwiftUI
 
 struct ContentView: View {
+    @State private var selectedTab = 0
+
     var body: some View {
-        TabView {
+        TabView(selection: $selectedTab) {
             DownloadsView()
                 .tabItem { Label("Downloads", systemImage: "arrow.down.circle") }
+                .tag(0)
+            BrowserView(selectedTab: $selectedTab)
+                .tabItem { Label("Browser", systemImage: "globe") }
+                .tag(1)
             SettingsView()
                 .tabItem { Label("Settings", systemImage: "gearshape") }
+                .tag(2)
         }
     }
 }
@@ -66,6 +73,11 @@ struct DownloadRow: View {
                     Text(item.filename).font(.headline).lineLimit(2)
                     Text(item.host.isEmpty ? item.urlString : item.host)
                         .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    if let phase = item.debridPhase {
+                        Text(phase).font(.caption).foregroundStyle(.blue).lineLimit(1)
+                    } else if let via = item.viaDebrid {
+                        Text("via \(via)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
                 }
                 Spacer()
                 statusBadge
