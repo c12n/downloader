@@ -36,15 +36,28 @@ struct DownloadItem: Identifiable, Codable {
     var debridPhase: String? = nil      // e.g. "Fetching via TorBox"
     var customName: Bool? = nil         // filename came from the user
 
+    // 1.3.0 additions (also optional, for the same decode reason).
+    var isMagnet: Bool? = nil           // urlString is a magnet: URI
+    var isTorrentFile: Bool? = nil      // source is a .torrent file URL
+    var autoRetried: Bool? = nil        // the one automatic repair was used
+
+    /// Bytes the background engine reports for in-flight segments.
+    /// Segment counters only advance when a whole segment lands, so
+    /// live progress is tracked separately and merged for display.
+    var transientBytes: Int64 = 0
+
+    var host: String { URL(string: originalURLString ?? urlString)?.host ?? URL(string: urlString)?.host ?? "" }
+
     // Transient (persisted but reset on load / not meaningful across launches)
     var speedBytesPerSec: Double = 0
     var etaSeconds: Double = -1
 
-    var host: String { URL(string: urlString)?.host ?? "" }
     var downloadedBytes: Int64 { segments.reduce(0) { $0 + $1.downloaded } }
+    /// Segment bytes plus whatever the engine has in flight right now.
+    var effectiveDownloaded: Int64 { max(downloadedBytes, transientBytes) }
     var fraction: Double {
         guard totalBytes > 0 else { return status == .completed ? 1 : 0 }
-        return min(1, Double(downloadedBytes) / Double(totalBytes))
+        return min(1, Double(effectiveDownloaded) / Double(totalBytes))
     }
 }
 
@@ -71,6 +84,9 @@ enum AppSettings {
         if UserDefaults.standard.object(forKey: adBlockKey) == nil { return true }
         return UserDefaults.standard.bool(forKey: adBlockKey)
     }
+
+    static let wifiOnlyKey = "wifiOnlyDownloads"
+    static var wifiOnly: Bool { UserDefaults.standard.bool(forKey: wifiOnlyKey) }
 }
 
 func formatBytes(_ bytes: Int64) -> String {

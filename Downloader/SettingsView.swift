@@ -5,6 +5,7 @@ struct SettingsView: View {
     @AppStorage(AppSettings.maxSimultaneousKey) private var maxSimultaneous: Int = 3
     @AppStorage(AppSettings.keepAwakeKey) private var keepAwake: Bool = true
     @AppStorage(AppSettings.adBlockKey) private var adBlock: Bool = true
+    @AppStorage(AppSettings.wifiOnlyKey) private var wifiOnly: Bool = false
     @ObservedObject private var debrid = DebridStore.shared
 
     private var versionString: String {
@@ -27,6 +28,13 @@ struct SettingsView: View {
                     Text("Performance")
                 } footer: {
                     Text("More connections can speed up large files from servers that support range requests. Changes apply to downloads started after the change.")
+                }
+                Section {
+                    Toggle("Wi-Fi only", isOn: $wifiOnly)
+                } header: {
+                    Text("Downloads")
+                } footer: {
+                    Text("New downloads only start on Wi-Fi. Downloads already running keep going if the connection changes. Downloads continue in the background either way, and a notification arrives when each file finishes.")
                 }
                 Section {
                     Toggle("Block ads and pop-ups", isOn: $adBlock)

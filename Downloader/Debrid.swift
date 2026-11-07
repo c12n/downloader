@@ -336,44 +336,59 @@ final class DebridStore: ObservableObject {
         return out
     }
 
-    private func resolvePremiumize(url: URL, key: String) async throws -> [DebridFile] {
-        func directdl() async throws -> [[String: Any]] {
-            let payload = try await pmPost("/transfer/directdl", ["src": url.absoluteString], key: key)
-            return (payload["content"] as? [[String: Any]]) ?? []
+    private func pmDirectdl(src: String, key: String) async throws -> [[String: Any]] {
+        let payload = try await pmPost("/transfer/directdl", ["src": src], key: key)
+        return (payload["content"] as? [[String: Any]]) ?? []
+    }
+
+    /// Creates a Premiumize transfer for src (a hoster link, a magnet,
+    /// or a .torrent URL) and waits for it to finish.
+    private func pmCreateAndWait(src: String, key: String,
+                                 onPhase: ((String) -> Void)? = nil) async throws {
+        let created = try await pmPost("/transfer/create", ["src": src], key: key)
+        guard created["status"] as? String == "success", let tid = created["id"] else {
+            throw DebridError.message("Premiumize could not take the link: \((created["message"] as? String) ?? "not supported")")
         }
-        var content = try await directdl()
-        if content.isEmpty {
-            let created = try await pmPost("/transfer/create", ["src": url.absoluteString], key: key)
-            guard created["status"] as? String == "success", let tid = created["id"] else {
-                throw DebridError.message("Premiumize could not take the link: \((created["message"] as? String) ?? "not supported")")
-            }
-            let deadline = Date().addingTimeInterval(8 * 60)
-            var finished = false
-            while Date() < deadline {
-                let listing = try await pmPost("/transfer/list", [:], key: key)
-                for t in (listing["transfers"] as? [[String: Any]]) ?? [] {
-                    if String(describing: t["id"] ?? "") == String(describing: tid) {
-                        let status = ((t["status"] as? String) ?? "").lowercased()
-                        if status == "finished" { finished = true }
-                        if status == "error" {
-                            throw DebridError.message("Premiumize transfer failed: \((t["message"] as? String) ?? "error")")
-                        }
-                        break
+        let deadline = Date().addingTimeInterval(20 * 60)
+        while Date() < deadline {
+            let listing = try await pmPost("/transfer/list", [:], key: key)
+            for t in (listing["transfers"] as? [[String: Any]]) ?? [] {
+                if String(describing: t["id"] ?? "") == String(describing: tid) {
+                    let status = ((t["status"] as? String) ?? "").lowercased()
+                    if status == "finished" { return }
+                    if status == "error" {
+                        throw DebridError.message("Premiumize transfer failed: \((t["message"] as? String) ?? "error")")
                     }
+                    if let progress = t["progress"] as? Double {
+                        onPhase?("Premiumize: fetching, \(Int(progress * 100))%")
+                    } else if !status.isEmpty {
+                        onPhase?("Premiumize: \(status)")
+                    }
+                    break
                 }
-                if finished { break }
-                try await Task.sleep(nanoseconds: 5_000_000_000)
             }
-            guard finished else { throw DebridError.message("Premiumize did not finish in time.") }
-            content = try await directdl()
+            try await Task.sleep(nanoseconds: 5_000_000_000)
         }
-        let out: [DebridFile] = content.compactMap { entry in
+        throw DebridError.message("Premiumize did not finish in time.")
+    }
+
+    private func pmFiles(from content: [[String: Any]]) -> [DebridFile] {
+        content.compactMap { entry in
             guard let link = (entry["link"] as? String) ?? (entry["stream_link"] as? String),
                   let direct = URL(string: link) else { return nil }
             let path = (entry["path"] as? String) ?? (entry["name"] as? String) ?? ""
             let name = path.split(separator: "/").last.map(String.init)
             return DebridFile(directURL: direct, filename: name)
         }
+    }
+
+    private func resolvePremiumize(url: URL, key: String) async throws -> [DebridFile] {
+        var content = try await pmDirectdl(src: url.absoluteString, key: key)
+        if content.isEmpty {
+            try await pmCreateAndWait(src: url.absoluteString, key: key)
+            content = try await pmDirectdl(src: url.absoluteString, key: key)
+        }
+        let out = pmFiles(from: content)
         guard !out.isEmpty else { throw DebridError.message("Premiumize returned no files for that link.") }
         return out
     }
@@ -408,6 +423,212 @@ final class DebridStore: ObservableObject {
         return [DebridFile(directURL: direct, filename: json["filename"] as? String)]
     }
 
+    // MARK: Magnets and torrent files
+
+    /// The first service (in routing priority order) whose key has
+    /// been tested and verified; torrent sources route through it.
+    func firstVerified() -> DebridServiceID? {
+        DebridServiceID.priority.first { verified[$0] == true }
+    }
+
+    /// Hands a magnet link to a service, waits for its servers to
+    /// fetch the torrent, and returns direct links for every file.
+    func resolveMagnet(_ magnet: String, service id: DebridServiceID,
+                       onPhase: @escaping (String) -> Void) async throws -> [DebridFile] {
+        let key = key(for: id)
+        guard !key.isEmpty else { throw DebridError.message("No \(id.displayName) API key saved.") }
+        switch id {
+        case .torbox: return try await torboxTorrent(magnet: magnet, torrentData: nil, key: key, onPhase: onPhase)
+        case .premiumize:
+            try await pmCreateAndWait(src: magnet, key: key, onPhase: onPhase)
+            let files = pmFiles(from: try await pmDirectdl(src: magnet, key: key))
+            guard !files.isEmpty else { throw DebridError.message("Premiumize returned no files for that magnet.") }
+            return files
+        case .realdebrid: return try await realDebridTorrent(magnet: magnet, torrentData: nil, key: key, onPhase: onPhase)
+        }
+    }
+
+    /// Same for a .torrent file URL: Premiumize fetches the file
+    /// itself; TorBox and Real-Debrid need the bytes uploaded.
+    func resolveTorrentURL(_ url: URL, service id: DebridServiceID,
+                           onPhase: @escaping (String) -> Void) async throws -> [DebridFile] {
+        let key = key(for: id)
+        guard !key.isEmpty else { throw DebridError.message("No \(id.displayName) API key saved.") }
+        switch id {
+        case .premiumize:
+            try await pmCreateAndWait(src: url.absoluteString, key: key, onPhase: onPhase)
+            let files = pmFiles(from: try await pmDirectdl(src: url.absoluteString, key: key))
+            guard !files.isEmpty else { throw DebridError.message("Premiumize returned no files for that torrent.") }
+            return files
+        case .torbox, .realdebrid:
+            onPhase("\(id.displayName): reading the .torrent file")
+            let (data, _) = try await URLSession.shared.data(from: url)
+            guard data.count > 0, data.count < 5_000_000 else {
+                throw DebridError.message("That .torrent file could not be read.")
+            }
+            if id == .torbox {
+                return try await torboxTorrent(magnet: nil, torrentData: data, key: key, onPhase: onPhase)
+            }
+            return try await realDebridTorrent(magnet: nil, torrentData: data, key: key, onPhase: onPhase)
+        }
+    }
+
+    private func torboxTorrent(magnet: String?, torrentData: Data?, key: String,
+                               onPhase: @escaping (String) -> Void) async throws -> [DebridFile] {
+        var torrentID: Any?
+        if let magnet {
+            var req = URLRequest(url: URL(string: "https://api.torbox.app/v1/api/torrents/createtorrent")!)
+            req.httpMethod = "POST"
+            req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = try JSONSerialization.data(withJSONObject: ["magnet": magnet])
+            let (data, _) = try await URLSession.shared.data(for: req)
+            let json = try JSON(data)
+            if json["success"] as? Bool == false {
+                throw DebridError.message("TorBox rejected the magnet: \((json["detail"] as? String) ?? (json["error"] as? String) ?? "unknown error")")
+            }
+            torrentID = (json["data"] as? [String: Any])?["torrent_id"] ?? (json["data"] as? [String: Any])?["id"]
+        } else if let torrentData {
+            torrentID = try await torboxUploadTorrentFile(torrentData, key: key)
+        }
+        guard let tid = torrentID else { throw DebridError.message("TorBox did not return a torrent id.") }
+
+        let deadline = Date().addingTimeInterval(20 * 60)
+        var files: [[String: Any]] = []
+        while Date() < deadline {
+            let (pdata, _) = try await request("https://api.torbox.app/v1/api/torrents/mylist?id=\(tid)", key: key)
+            let pjson = try JSON(pdata)
+            var item: [String: Any] = [:]
+            if let dict = pjson["data"] as? [String: Any] { item = dict }
+            if let list = pjson["data"] as? [[String: Any]] { item = list.first ?? [:] }
+            let state = ((item["download_state"] as? String) ?? (item["state"] as? String) ?? "").lowercased()
+            if state.contains("error") || state.contains("fail") || state.contains("expired") {
+                throw DebridError.message("TorBox torrent failed (\(state)).")
+            }
+            files = (item["files"] as? [[String: Any]]) ?? []
+            let progress = (item["progress"] as? Double) ?? 0
+            onPhase(progress > 0 ? "TorBox: fetching torrent, \(Int(progress * 100))%" : "TorBox: fetching torrent")
+            let done = (item["download_finished"] as? Bool) == true
+                || ["completed", "downloaded", "finished", "cached", "uploading", "seeding"].contains(state)
+            if !files.isEmpty && done { break }
+            try await Task.sleep(nanoseconds: 5_000_000_000)
+        }
+        guard !files.isEmpty else { throw DebridError.message("TorBox did not finish the torrent in time.") }
+        var out: [DebridFile] = []
+        for f in files {
+            guard let fid = f["id"] else { continue }
+            let (rdata, _) = try await request(
+                "https://api.torbox.app/v1/api/torrents/requestdl?token=\(key)&torrent_id=\(tid)&file_id=\(fid)", key: nil)
+            let rjson = try JSON(rdata)
+            if let link = rjson["data"] as? String, let direct = URL(string: link) {
+                let name = (f["name"] as? String) ?? (f["filename"] as? String) ?? (f["file_name"] as? String)
+                out.append(DebridFile(directURL: direct, filename: name))
+            }
+        }
+        guard !out.isEmpty else { throw DebridError.message("TorBox returned no download links for that torrent.") }
+        return out
+    }
+
+    private func torboxUploadTorrentFile(_ data: Data, key: String) async throws -> Any {
+        let boundary = "Boundary-\(UUID().uuidString)"
+        var req = URLRequest(url: URL(string: "https://api.torbox.app/v1/api/torrents/createtorrent")!)
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        var body = Data()
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"file.torrent\"\r\n".data(using: .utf8)!)
+        body.append("Content-Type: application/x-bittorrent\r\n\r\n".data(using: .utf8)!)
+        body.append(data)
+        body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
+        req.httpBody = body
+        let (respData, _) = try await URLSession.shared.data(for: req)
+        let json = try JSON(respData)
+        if json["success"] as? Bool == false {
+            throw DebridError.message("TorBox rejected the .torrent file: \((json["detail"] as? String) ?? (json["error"] as? String) ?? "unknown error")")
+        }
+        let d = (json["data"] as? [String: Any]) ?? [:]
+        guard let tid = d["torrent_id"] ?? d["id"] else {
+            throw DebridError.message("TorBox did not return a torrent id.")
+        }
+        return tid
+    }
+
+    private func realDebridTorrent(magnet: String?, torrentData: Data?, key: String,
+                                   onPhase: @escaping (String) -> Void) async throws -> [DebridFile] {
+        var torrentID: String?
+        if let magnet {
+            var req = URLRequest(url: URL(string: "https://api.real-debrid.com/rest/1.0/torrents/addMagnet")!)
+            req.httpMethod = "POST"
+            req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+            req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+            let encoded = magnet.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? magnet
+            req.httpBody = "magnet=\(encoded)".data(using: .utf8)
+            let (data, _) = try await URLSession.shared.data(for: req)
+            let json = try JSON(data)
+            if let err = json["error"] as? String { throw DebridError.message("Real-Debrid rejected the magnet (\(err)).") }
+            torrentID = json["id"] as? String
+        } else if let torrentData {
+            var req = URLRequest(url: URL(string: "https://api.real-debrid.com/rest/1.0/torrents/addTorrent")!)
+            req.httpMethod = "PUT"
+            req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+            req.setValue("application/x-bittorrent", forHTTPHeaderField: "Content-Type")
+            req.httpBody = torrentData
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            if let json = try? JSON(data), let err = json["error"] as? String {
+                throw DebridError.message("Real-Debrid rejected the .torrent file (\(err)).")
+            }
+            guard (200...299).contains((resp as? HTTPURLResponse)?.statusCode ?? 0) else {
+                throw DebridError.message("Real-Debrid rejected the .torrent file.")
+            }
+            // addTorrent's body can be empty on success; the new
+            // torrent is then the first one in the user's list.
+            if let json = try? JSON(data), let tid = json["id"] as? String {
+                torrentID = tid
+            } else {
+                let (ldata, _) = try await request("https://api.real-debrid.com/rest/1.0/torrents?limit=1", key: key)
+                if let list = (try? JSONSerialization.jsonObject(with: ldata)) as? [[String: Any]] {
+                    torrentID = list.first?["id"] as? String
+                }
+            }
+        }
+        guard let tid = torrentID else { throw DebridError.message("Real-Debrid did not return a torrent id.") }
+
+        // Select every file, then poll until the torrent is downloaded.
+        var sel = URLRequest(url: URL(string: "https://api.real-debrid.com/rest/1.0/torrents/selectFiles/\(tid)")!)
+        sel.httpMethod = "POST"
+        sel.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        sel.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        sel.httpBody = "files=all".data(using: .utf8)
+        _ = try? await URLSession.shared.data(for: sel)
+
+        let deadline = Date().addingTimeInterval(20 * 60)
+        var links: [String] = []
+        while Date() < deadline {
+            let (idata, _) = try await request("https://api.real-debrid.com/rest/1.0/torrents/info/\(tid)", key: key)
+            let info = try JSON(idata)
+            let status = ((info["status"] as? String) ?? "").lowercased()
+            if ["error", "virus", "dead"].contains(status) {
+                throw DebridError.message("Real-Debrid torrent failed (\(status)).")
+            }
+            if let progress = info["progress"] as? Double, status != "downloaded" {
+                onPhase("Real-Debrid: fetching torrent, \(Int(progress))%")
+            }
+            if status == "downloaded" {
+                links = (info["links"] as? [String]) ?? []
+                break
+            }
+            try await Task.sleep(nanoseconds: 5_000_000_000)
+        }
+        guard !links.isEmpty else { throw DebridError.message("Real-Debrid did not finish the torrent in time.") }
+        var out: [DebridFile] = []
+        for link in links {
+            guard let url = URL(string: link) else { continue }
+            out += try await resolveRealDebrid(url: url, key: key)
+        }
+        return out
+    }
+
     // MARK: HTTP helpers
 
     private func request(_ urlString: String, key: String?) async throws -> (Data, HTTPURLResponse) {
@@ -425,5 +646,23 @@ final class DebridStore: ObservableObject {
             throw DebridError.message("The service returned an unexpected response.")
         }
         return dict
+    }
+}
+
+// MARK: - Link classification
+
+enum DebridLinks {
+    static func isMagnet(_ s: String) -> Bool {
+        s.lowercased().hasPrefix("magnet:?") && s.lowercased().contains("xt=urn:btih:")
+    }
+
+    /// Display name for a magnet: its dn= parameter when present.
+    static func magnetName(_ magnet: String) -> String {
+        guard let comps = URLComponents(string: magnet) else { return "Magnet download" }
+        if let dn = comps.queryItems?.first(where: { $0.name == "dn" })?.value,
+           !dn.trimmingCharacters(in: .whitespaces).isEmpty {
+            return sanitizeFilename(dn)
+        }
+        return "Magnet download"
     }
 }

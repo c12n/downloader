@@ -1,6 +1,9 @@
 import SwiftUI
+import UIKit
 
 struct ContentView: View {
+    @EnvironmentObject private var manager: DownloadManager
+    @Environment(\.scenePhase) private var scenePhase
     @State private var selectedTab = 0
 
     var body: some View {
@@ -15,12 +18,34 @@ struct ContentView: View {
                 .tabItem { Label("Settings", systemImage: "gearshape") }
                 .tag(2)
         }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { manager.drainSharedLinks() }
+        }
     }
+}
+
+enum QueueFilter: String, CaseIterable {
+    case all = "All", active = "Active", done = "Done", failed = "Failed"
 }
 
 struct DownloadsView: View {
     @EnvironmentObject private var manager: DownloadManager
+    @AppStorage(AppSettings.wifiOnlyKey) private var wifiOnly: Bool = false
     @State private var showingAdd = false
+    @State private var filter: QueueFilter = .all
+
+    private var visibleItems: [DownloadItem] {
+        switch filter {
+        case .all: return manager.items
+        case .active: return manager.items.filter { $0.status == .queued || $0.status == .downloading || $0.status == .paused }
+        case .done: return manager.items.filter { $0.status == .completed }
+        case .failed: return manager.items.filter { $0.status == .failed }
+        }
+    }
+
+    private var waitingForWiFi: Bool {
+        wifiOnly && !manager.wifiAvailable && manager.items.contains { $0.status == .queued }
+    }
 
     var body: some View {
         NavigationStack {
@@ -28,15 +53,38 @@ struct DownloadsView: View {
                 if manager.items.isEmpty {
                     ContentUnavailableView("No downloads yet",
                                            systemImage: "arrow.down.circle",
-                                           description: Text("Tap + to add a file URL."))
+                                           description: Text("Tap + to add a file URL, or grab one in the Browser tab."))
                 } else {
-                    List {
-                        ForEach(manager.items) { item in
-                            DownloadRow(item: item)
-                                .environmentObject(manager)
+                    VStack(spacing: 0) {
+                        Picker("Filter", selection: $filter) {
+                            ForEach(QueueFilter.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                         }
-                        .onDelete { offsets in
-                            for i in offsets { manager.delete(manager.items[i]) }
+                        .pickerStyle(.segmented)
+                        .padding(.horizontal)
+                        .padding(.vertical, 8)
+                        if waitingForWiFi {
+                            Label("Waiting for Wi-Fi to start new downloads", systemImage: "wifi.slash")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal)
+                                .padding(.bottom, 6)
+                        }
+                        if visibleItems.isEmpty {
+                            ContentUnavailableView("Nothing here",
+                                                   systemImage: "line.3.horizontal.decrease.circle",
+                                                   description: Text("No \(filter.rawValue.lowercased()) downloads."))
+                        } else {
+                            List {
+                                ForEach(visibleItems) { item in
+                                    DownloadRow(item: item)
+                                        .environmentObject(manager)
+                                }
+                                .onDelete { offsets in
+                                    for i in offsets { manager.delete(visibleItems[i]) }
+                                }
+                            }
+                            .listStyle(.plain)
                         }
                     }
                 }
@@ -65,6 +113,7 @@ struct DownloadRow: View {
     @EnvironmentObject private var manager: DownloadManager
     let item: DownloadItem
     @State private var showingShare = false
+    @State private var showingDetails = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -106,13 +155,16 @@ struct DownloadRow: View {
         .sheet(isPresented: $showingShare) {
             ShareSheet(activityItems: [manager.finalURL(for: item)])
         }
+        .sheet(isPresented: $showingDetails) {
+            DownloadDetailsView(item: item).environmentObject(manager)
+        }
     }
 
     private var sizeText: String {
         if item.totalBytes > 0 {
-            return "\(formatBytes(item.downloadedBytes)) of \(formatBytes(item.totalBytes)) · \(Int(item.fraction * 100))%"
+            return "\(formatBytes(item.effectiveDownloaded)) of \(formatBytes(item.totalBytes)) · \(Int(item.fraction * 100))%"
         }
-        return formatBytes(item.downloadedBytes)
+        return formatBytes(item.effectiveDownloaded)
     }
 
     @ViewBuilder
@@ -145,10 +197,101 @@ struct DownloadRow: View {
                         .buttonStyle(.borderless)
                 }
             }
+            Button { showingDetails = true } label: { Image(systemName: "info.circle") }
+                .buttonStyle(.borderless)
             Button(role: .destructive) { manager.delete(item) } label: { Image(systemName: "trash") }
                 .buttonStyle(.borderless)
         }
         .font(.title3)
+    }
+}
+
+/// Everything known about one download, with copyable links.
+struct DownloadDetailsView: View {
+    @EnvironmentObject private var manager: DownloadManager
+    @Environment(\.dismiss) private var dismiss
+    let item: DownloadItem
+    @State private var showingShare = false
+
+    private var statusText: String {
+        switch item.status {
+        case .queued: return "Queued"
+        case .downloading: return item.debridPhase ?? "Downloading"
+        case .paused: return "Paused"
+        case .completed: return "Completed"
+        case .failed: return "Failed"
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("File") {
+                    LabeledContent("Name", value: item.filename)
+                    LabeledContent("Status", value: statusText)
+                    if item.totalBytes > 0 {
+                        LabeledContent("Size", value: "\(formatBytes(item.effectiveDownloaded)) of \(formatBytes(item.totalBytes))")
+                    } else if item.effectiveDownloaded > 0 {
+                        LabeledContent("Downloaded", value: formatBytes(item.effectiveDownloaded))
+                    }
+                    if item.segments.count > 1 {
+                        LabeledContent("Connections", value: "\(item.segments.count)")
+                    }
+                    LabeledContent("Added", value: item.createdAt.formatted(date: .abbreviated, time: .shortened))
+                }
+                if let via = item.viaDebrid {
+                    Section("Debrid") {
+                        LabeledContent("Service", value: via)
+                    }
+                }
+                Section("Source") {
+                    if let original = item.originalURLString, original != item.urlString {
+                        linkRow("Original link", original)
+                    }
+                    linkRow(item.isMagnet == true ? "Magnet" : "Link", item.urlString)
+                }
+                if item.status == .failed, let err = item.errorMessage {
+                    Section("Error") {
+                        Text(err).font(.footnote).foregroundStyle(.red)
+                    }
+                }
+                if item.status == .completed && manager.fileExistsCompleted(item) {
+                    Section {
+                        Button { showingShare = true } label: {
+                            Label("Share file", systemImage: "square.and.arrow.up")
+                        }
+                    }
+                }
+                Section {
+                    Button("Delete download", role: .destructive) {
+                        manager.delete(item)
+                        dismiss()
+                    }
+                }
+            }
+            .navigationTitle("Details")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+            }
+            .sheet(isPresented: $showingShare) {
+                ShareSheet(activityItems: [manager.finalURL(for: item)])
+            }
+        }
+    }
+
+    private func linkRow(_ label: String, _ value: String) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(label).font(.caption).foregroundStyle(.secondary)
+                Text(value).font(.footnote).lineLimit(3)
+            }
+            Spacer()
+            Button { UIPasteboard.general.string = value } label: {
+                Image(systemName: "doc.on.doc")
+            }
+            .buttonStyle(.borderless)
+        }
     }
 }
 
@@ -170,7 +313,7 @@ struct AddDownloadView: View {
                 } header: {
                     Text("URL(s) - one per line")
                 } footer: {
-                    Text("Paste one link, or several links each on its own line.")
+                    Text("Paste one link, or several links each on its own line. Magnet links work too; they are fetched through your verified debrid service.")
                 }
                 Section("Custom filename (single URL only)") {
                     TextField("Optional - e.g. movie.mp4", text: $customFilename)
@@ -183,6 +326,14 @@ struct AddDownloadView: View {
             }
             .navigationTitle("Add download")
             .navigationBarTitleDisplayMode(.inline)
+            .onAppear {
+                // Convenience: if the clipboard already holds links,
+                // pre-fill the field (only when it is empty).
+                guard urlText.isEmpty,
+                      let clip = UIPasteboard.general.string,
+                      clip.contains("http") || clip.contains("magnet:?") else { return }
+                urlText = clip
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {

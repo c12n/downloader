@@ -10,6 +10,32 @@ struct PendingCapture: Identifiable {
     let sizeBytes: Int64 // -1 when unknown
 }
 
+struct PendingMagnet: Identifiable {
+    let id = UUID()
+    let magnet: String
+    let name: String
+}
+
+/// One downloadable link found on the current page.
+struct FoundLink: Identifiable {
+    let id = UUID()
+    let urlString: String
+    let title: String
+    var isMagnet: Bool { DebridLinks.isMagnet(urlString) }
+}
+
+struct BrowserBookmark: Codable, Identifiable {
+    var id = UUID()
+    var title: String
+    var urlString: String
+}
+
+/// Wrapper so a scan result can drive a .sheet(item:).
+struct GrabResult: Identifiable {
+    let id = UUID()
+    let links: [FoundLink]
+}
+
 /// File extensions the browser treats as downloads when a link to one
 /// is tapped (pages and media the web view can show are left alone).
 private let downloadExtensions: Set<String> = [
@@ -66,6 +92,8 @@ final class BrowserModel: ObservableObject {
     @Published var isLoading = false
     @Published var progress: Double = 0
     @Published var pendingCapture: PendingCapture? = nil
+    @Published var pendingMagnet: PendingMagnet? = nil
+    @Published var bookmarks: [BrowserBookmark] = []
 
     weak var webView: WKWebView?
     private var progressObservation: NSKeyValueObservation?
@@ -133,6 +161,71 @@ final class BrowserModel: ObservableObject {
         pendingCapture = PendingCapture(url: url, filename: filename, sizeBytes: sizeBytes)
     }
 
+    func proposeMagnet(_ magnet: String) {
+        guard pendingMagnet == nil, pendingCapture == nil else { return }
+        pendingMagnet = PendingMagnet(magnet: magnet, name: DebridLinks.magnetName(magnet))
+    }
+
+    // MARK: Grab all links
+
+    /// Scans the page for links to downloadable files (and magnets)
+    /// and returns them in page order, de-duplicated.
+    func scanLinks(completion: @escaping ([FoundLink]) -> Void) {
+        guard let webView else { completion([]); return }
+        let js = """
+        Array.from(document.querySelectorAll('a[href]')).map(a => ({
+            href: a.href,
+            text: (a.textContent || '').trim().slice(0, 120)
+        }))
+        """
+        webView.evaluateJavaScript(js) { result, _ in
+            var found: [FoundLink] = []
+            var seen = Set<String>()
+            for entry in (result as? [[String: Any]]) ?? [] {
+                guard let href = entry["href"] as? String, !href.isEmpty,
+                      !seen.contains(href) else { continue }
+                let isMagnet = DebridLinks.isMagnet(href)
+                if !isMagnet {
+                    guard let url = URL(string: href), isDownloadLink(url) else { continue }
+                }
+                seen.insert(href)
+                let text = (entry["text"] as? String) ?? ""
+                found.append(FoundLink(urlString: href,
+                                       title: text.isEmpty ? href : text))
+            }
+            Task { @MainActor in completion(found) }
+        }
+    }
+
+    // MARK: Bookmarks
+
+    private static let bookmarksKey = "browser.bookmarks"
+
+    func loadBookmarks() {
+        if let data = UserDefaults.standard.data(forKey: Self.bookmarksKey),
+           let decoded = try? JSONDecoder().decode([BrowserBookmark].self, from: data) {
+            bookmarks = decoded
+        }
+    }
+
+    func addCurrentPageBookmark() {
+        guard let webView, let url = webView.url else { return }
+        let title = (webView.title?.isEmpty == false) ? webView.title! : (url.host ?? url.absoluteString)
+        bookmarks.append(BrowserBookmark(title: title, urlString: url.absoluteString))
+        saveBookmarks()
+    }
+
+    func removeBookmarks(at offsets: IndexSet) {
+        bookmarks.remove(atOffsets: offsets)
+        saveBookmarks()
+    }
+
+    private func saveBookmarks() {
+        if let data = try? JSONEncoder().encode(bookmarks) {
+            UserDefaults.standard.set(data, forKey: Self.bookmarksKey)
+        }
+    }
+
     func syncNavState() {
         guard let webView else { return }
         canGoBack = webView.canGoBack
@@ -173,7 +266,9 @@ private struct WebViewRepresentable: UIViewRepresentable {
                      for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
             if let url = navigationAction.request.url {
                 Task { @MainActor in
-                    if isDownloadLink(url) {
+                    if url.scheme?.lowercased() == "magnet" {
+                        self.model.proposeMagnet(url.absoluteString)
+                    } else if isDownloadLink(url) {
                         self.model.proposeCapture(url: url, filename: captureFilename(for: url, disposition: nil))
                     } else if url.scheme == "http" || url.scheme == "https" {
                         webView.load(navigationAction.request)
@@ -187,6 +282,11 @@ private struct WebViewRepresentable: UIViewRepresentable {
                      decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
             guard let url = navigationAction.request.url else { decisionHandler(.cancel); return }
             let scheme = url.scheme?.lowercased() ?? ""
+            // A tapped magnet goes to the debrid flow, not navigation.
+            if scheme == "magnet" {
+                model.proposeMagnet(url.absoluteString)
+                decisionHandler(.cancel); return
+            }
             // Anything that is not a web page (app deep links, tel:,
             // intent:, ...) is dropped: ad pages love those.
             guard scheme == "http" || scheme == "https" || scheme == "about" else {
@@ -256,6 +356,8 @@ struct BrowserView: View {
     @EnvironmentObject private var manager: DownloadManager
     @StateObject private var model = BrowserModel()
     @Binding var selectedTab: Int
+    @State private var grabResult: GrabResult? = nil
+    @State private var showingBookmarks = false
 
     var body: some View {
         NavigationStack {
@@ -269,6 +371,24 @@ struct BrowserView: View {
             }
             .navigationTitle("Browser")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Menu {
+                        Button {
+                            model.scanLinks { grabResult = GrabResult(links: $0) }
+                        } label: { Label("Grab all links on this page", systemImage: "tray.and.arrow.down") }
+                        Button {
+                            model.addCurrentPageBookmark()
+                        } label: { Label("Bookmark this page", systemImage: "bookmark") }
+                        Button {
+                            showingBookmarks = true
+                        } label: { Label("Bookmarks", systemImage: "book") }
+                        Button {
+                            model.webView?.load(URLRequest(url: BrowserModel.startURL))
+                        } label: { Label("Home", systemImage: "house") }
+                    } label: { Image(systemName: "ellipsis.circle") }
+                }
+            }
             .alert(item: $model.pendingCapture) { capture in
                 Alert(
                     title: Text("Download this file?"),
@@ -283,6 +403,17 @@ struct BrowserView: View {
                     secondaryButton: .cancel()
                 )
             }
+            .sheet(item: $grabResult) { result in
+                GrabLinksSheet(links: result.links) { chosen in
+                    _ = manager.addURLs(text: chosen.joined(separator: "\n"), customFilename: "")
+                    grabResult = nil
+                    if !chosen.isEmpty { selectedTab = 0 }
+                } onCancel: { grabResult = nil }
+            }
+            .sheet(isPresented: $showingBookmarks) {
+                BookmarksSheet(model: model)
+            }
+            .onAppear { model.loadBookmarks() }
         }
     }
 
@@ -314,5 +445,132 @@ struct BrowserView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
+        .alert(item: $model.pendingMagnet) { pending in
+            Alert(
+                title: Text("Add this magnet?"),
+                message: Text(magnetMessage(pending)),
+                primaryButton: .default(Text("Add")) {
+                    _ = manager.addURLs(text: pending.magnet, customFilename: "")
+                    selectedTab = 0
+                },
+                secondaryButton: .cancel()
+            )
+        }
+    }
+
+    private func magnetMessage(_ pending: PendingMagnet) -> String {
+        if let service = DebridStore.shared.firstVerified() {
+            return "\(pending.name)\nIt will be fetched through \(service.displayName)."
+        }
+        return "\(pending.name)\nAdd and verify a debrid key in Settings first; the magnet will wait in your queue."
+    }
+}
+
+// MARK: - Grab-all-links sheet
+
+private struct GrabLinksSheet: View {
+    let links: [FoundLink]
+    var onAdd: ([String]) -> Void
+    var onCancel: () -> Void
+    @State private var selected: Set<String>
+
+    init(links: [FoundLink], onAdd: @escaping ([String]) -> Void, onCancel: @escaping () -> Void) {
+        self.links = links
+        self.onAdd = onAdd
+        self.onCancel = onCancel
+        _selected = State(initialValue: Set(links.map(\.urlString)))
+    }
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if links.isEmpty {
+                    ContentUnavailableView("No download links found",
+                                           systemImage: "tray.and.arrow.down",
+                                           description: Text("This page has no links to files the app recognises."))
+                } else {
+                    List {
+                        ForEach(links) { link in
+                            Button {
+                                if selected.contains(link.urlString) {
+                                    selected.remove(link.urlString)
+                                } else {
+                                    selected.insert(link.urlString)
+                                }
+                            } label: {
+                                HStack(alignment: .top, spacing: 10) {
+                                    Image(systemName: selected.contains(link.urlString) ? "checkmark.circle.fill" : "circle")
+                                        .foregroundStyle(selected.contains(link.urlString) ? Color.accentColor : Color.secondary)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(link.isMagnet ? link.title : (URL(string: link.urlString)?.lastPathComponent ?? link.title))
+                                            .font(.subheadline).lineLimit(2)
+                                        Text(link.isMagnet ? "Magnet link" : (URL(string: link.urlString)?.host ?? link.urlString))
+                                            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                    }
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Links on this page")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { onCancel() } }
+                ToolbarItem(placement: .primaryAction) {
+                    Menu {
+                        Button("Select all") { selected = Set(links.map(\.urlString)) }
+                        Button("Select none") { selected = [] }
+                    } label: { Image(systemName: "checklist") }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Add \(selected.count)") { onAdd(links.filter { selected.contains($0.urlString) }.map(\.urlString)) }
+                        .disabled(selected.isEmpty)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Bookmarks sheet
+
+private struct BookmarksSheet: View {
+    @ObservedObject var model: BrowserModel
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if model.bookmarks.isEmpty {
+                    ContentUnavailableView("No bookmarks yet",
+                                           systemImage: "book",
+                                           description: Text("Use Bookmark this page in the browser menu."))
+                } else {
+                    List {
+                        ForEach(model.bookmarks) { mark in
+                            Button {
+                                if let url = URL(string: mark.urlString) {
+                                    model.webView?.load(URLRequest(url: url))
+                                }
+                                dismiss()
+                            } label: {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(mark.title).font(.subheadline).lineLimit(1)
+                                    Text(mark.urlString).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .onDelete { model.removeBookmarks(at: $0) }
+                    }
+                }
+            }
+            .navigationTitle("Bookmarks")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+            }
+        }
     }
 }

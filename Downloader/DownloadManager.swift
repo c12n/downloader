@@ -1,14 +1,22 @@
 import Foundation
 import UIKit
+import Network
+import UserNotifications
 
 @MainActor
 final class DownloadManager: ObservableObject {
     @Published private(set) var items: [DownloadItem] = []
+    /// Whether the current network path includes Wi-Fi (or wired).
+    /// Only enforced when the Wi-Fi-only setting is on.
+    @Published private(set) var wifiAvailable = true
 
-    private var runners: [UUID: SegmentRunner] = [:]
+    let engine = BackgroundDownloadEngine()
+    private var engineActive: Set<UUID> = []
     private var speedSamples: [UUID: (bytes: Int64, time: Date)] = [:]
     private var speedTimer: Timer?
     private var progressSaveCounter = 0
+    private let pathMonitor = NWPathMonitor()
+    private var notificationAuthRequested = false
 
     // MARK: Paths
 
@@ -37,9 +45,51 @@ final class DownloadManager: ObservableObject {
 
     init() {
         loadState()
+        // Wire the background engine. Downloads may have kept going
+        // while the app was away; attach to whatever it still holds.
+        engine.onProgress = { [weak self] id, segs, live in
+            Task { @MainActor in self?.applyProgress(id: id, segments: segs, liveBytes: live) }
+        }
+        engine.onFinish = { [weak self] id, result, segs in
+            Task { @MainActor in self?.applyFinish(id: id, result: result, segments: segs) }
+        }
+        BackgroundSessionRelay.shared.engine = engine
+        if let pending = BackgroundSessionRelay.shared.pendingHandler {
+            engine.backgroundCompletionHandler = pending
+            BackgroundSessionRelay.shared.pendingHandler = nil
+        }
+        for item in items where item.status == .downloading {
+            let preSegs = engine.segments(for: item.id)
+            if let result = engine.attach(itemID: item.id, segments: item.segments, partsDir: partsDir(for: item.id)) {
+                applyFinish(id: item.id, result: result, segments: preSegs ?? item.segments)
+            } else {
+                engineActive.insert(item.id)
+                if let idx = items.firstIndex(where: { $0.id == item.id }), let segs = preSegs {
+                    items[idx].segments = segs
+                }
+            }
+        }
+        // Anything still marked downloading that the engine knows
+        // nothing about (and reports nothing for) settles as paused.
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            guard let self else { return }
+            self.engine.sweepOrphans(self.items.filter { $0.status == .downloading }.map(\.id))
+        }
+        pathMonitor.pathUpdateHandler = { [weak self] path in
+            let wifi = path.usesInterfaceType(.wifi) || path.usesInterfaceType(.wiredEthernet)
+            Task { @MainActor in
+                guard let self else { return }
+                let changed = self.wifiAvailable != wifi
+                self.wifiAvailable = wifi
+                if changed && wifi { self.schedule() }
+            }
+        }
+        pathMonitor.start(queue: DispatchQueue(label: "path-monitor"))
         speedTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.updateSpeeds() }
         }
+        drainSharedLinks()
     }
 
     // MARK: Persistence
@@ -57,21 +107,43 @@ final class DownloadManager: ObservableObject {
               let decoded = try? JSONDecoder().decode([DownloadItem].self, from: data) else { return }
         items = decoded.map { item in
             var item = item
-            if item.status == .downloading { item.status = .paused } // resume manually / via Resume All
+            // Downloads run on a background session now: a .downloading
+            // item may genuinely still be running, so it is NOT flipped
+            // to paused here. init() attaches it to the engine, and the
+            // orphan sweep settles any that are truly dead.
             item.speedBytesPerSec = 0
             item.etaSeconds = -1
+            item.transientBytes = item.downloadedBytes
+            item.debridPhase = nil
             return item
         }
     }
 
     // MARK: Adding
 
-    /// Returns (added, invalidLineCount)
+    /// Returns (added, invalidLineCount). Accepts http(s) links and
+    /// magnet: URIs; exact duplicates of queued items are skipped.
     @discardableResult
     func addURLs(text: String, customFilename: String) -> (Int, Int) {
         var added = 0, invalid = 0
         let lines = text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         for line in lines {
+            if items.contains(where: { $0.urlString == line || $0.originalURLString == line }) {
+                continue // already queued
+            }
+            if DebridLinks.isMagnet(line) {
+                var item = DownloadItem(urlString: line, filename: uniqueFilename(DebridLinks.magnetName(line)))
+                item.isMagnet = true
+                item.originalURLString = line
+                item.debridResolved = false
+                if let service = DebridStore.shared.firstVerified() {
+                    item.viaDebrid = service.displayName
+                    item.debridService = service.rawValue
+                }
+                items.insert(item, at: 0)
+                added += 1
+                continue
+            }
             guard let url = URL(string: line), let scheme = url.scheme?.lowercased(),
                   scheme == "http" || scheme == "https", url.host != nil else { invalid += 1; continue }
             var name = ""
@@ -85,10 +157,19 @@ final class DownloadManager: ObservableObject {
             name = uniqueFilename(name)
             var item = DownloadItem(urlString: line, filename: name)
             item.customName = isCustom
-            // Debrid routing: a link whose host is supported by a
-            // service the user has tested and verified is fetched
-            // through that service instead of directly.
-            if let host = url.host, let service = DebridStore.shared.service(forHost: host) {
+            if url.pathExtension.lowercased() == "torrent",
+               let service = DebridStore.shared.firstVerified() {
+                // A .torrent file goes to a debrid service, which
+                // fetches the torrent's contents as regular files.
+                item.isTorrentFile = true
+                item.viaDebrid = service.displayName
+                item.debridService = service.rawValue
+                item.originalURLString = line
+                item.debridResolved = false
+            } else if let host = url.host, let service = DebridStore.shared.service(forHost: host) {
+                // Debrid routing: a link whose host is supported by a
+                // service the user has tested and verified is fetched
+                // through that service instead of directly.
                 item.viaDebrid = service.displayName
                 item.debridService = service.rawValue
                 item.originalURLString = line
@@ -97,7 +178,10 @@ final class DownloadManager: ObservableObject {
             items.insert(item, at: 0)
             added += 1
         }
-        if added > 0 { saveState(); schedule() }
+        if added > 0 {
+            requestNotificationAuthorizationOnce()
+            saveState(); schedule()
+        }
         return (added, invalid)
     }
 
@@ -118,39 +202,53 @@ final class DownloadManager: ObservableObject {
 
     func pause(_ item: DownloadItem) {
         guard let idx = items.firstIndex(where: { $0.id == item.id }) else { return }
-        if let runner = runners[item.id] {
-            items[idx].status = .paused
-            runner.stop() // finish handler will persist segments
-        } else if items[idx].status == .downloading || items[idx].status == .queued {
-            items[idx].status = .paused
+        let wasActive = engineActive.contains(item.id)
+        items[idx].status = .paused
+        items[idx].debridPhase = nil
+        if wasActive {
+            // The engine cancels the segment tasks (keeping resume
+            // data) and reports back; applyFinish settles the state.
+            engine.pause(itemID: item.id)
         }
         saveState()
         updateIdleTimer()
     }
 
-    func resume(_ item: DownloadItem) {
-        guard let idx = items.firstIndex(where: { $0.id == item.id }) else { return }
-        if items[idx].status == .completed { return }
-        // A debrid item re-resolves on resume: direct links expire, so
-        // a previously resolved item starts again from its hoster link.
+    /// Shared restart preparation: a debrid item re-resolves (direct
+    /// links expire), and its stale part/resume files are dropped.
+    private func resetForRestart(_ idx: Int) {
         if items[idx].debridService != nil, items[idx].debridResolved == true,
            let original = items[idx].originalURLString {
             items[idx].urlString = original
             items[idx].debridResolved = false
             items[idx].probed = false
             items[idx].segments = []
+            items[idx].transientBytes = 0
+            try? FileManager.default.removeItem(at: partsDir(for: items[idx].id))
         }
+        items[idx].debridPhase = nil
+    }
+
+    func resume(_ item: DownloadItem) {
+        guard let idx = items.firstIndex(where: { $0.id == item.id }) else { return }
+        if items[idx].status == .completed { return }
+        resetForRestart(idx)
         items[idx].status = .queued
         items[idx].errorMessage = nil
         saveState()
         schedule()
     }
 
-    func retry(_ item: DownloadItem) { resume(item) }
+    func retry(_ item: DownloadItem) {
+        // A manual retry also earns a fresh automatic repair.
+        guard let idx = items.firstIndex(where: { $0.id == item.id }) else { return }
+        items[idx].autoRetried = nil
+        resume(item)
+    }
 
     func delete(_ item: DownloadItem) {
-        runners[item.id]?.stop()
-        runners[item.id] = nil
+        engine.cancel(itemID: item.id)
+        engineActive.remove(item.id)
         try? FileManager.default.removeItem(at: partsDir(for: item.id))
         try? FileManager.default.removeItem(at: finalURL(for: item))
         items.removeAll { $0.id == item.id }
@@ -162,13 +260,7 @@ final class DownloadManager: ObservableObject {
     func pauseAll() { for item in items where item.status == .downloading || item.status == .queued { pause(item) } }
     func resumeAll() {
         for i in items.indices where items[i].status == .paused || items[i].status == .failed {
-            if items[i].debridService != nil, items[i].debridResolved == true,
-               let original = items[i].originalURLString {
-                items[i].urlString = original
-                items[i].debridResolved = false
-                items[i].probed = false
-                items[i].segments = []
-            }
+            resetForRestart(i)
             items[i].status = .queued; items[i].errorMessage = nil
         }
         saveState(); schedule()
@@ -183,20 +275,25 @@ final class DownloadManager: ObservableObject {
     // MARK: Scheduling
 
     private func schedule() {
-        let active = runners.count
+        // Wi-Fi only: new downloads wait for a Wi-Fi path. Running
+        // downloads are left alone if the path changes mid-flight.
+        if AppSettings.wifiOnly && !wifiAvailable { updateIdleTimer(); return }
+        let active = items.filter { $0.status == .downloading }.count
         guard active < AppSettings.maxSimultaneous else { return }
         for item in items where item.status == .queued {
-            if runners.count >= AppSettings.maxSimultaneous { break }
+            if items.filter({ $0.status == .downloading }).count >= AppSettings.maxSimultaneous { break }
             start(item)
         }
         updateIdleTimer()
     }
 
     private func start(_ item: DownloadItem) {
-        guard let idx = items.firstIndex(where: { $0.id == item.id }), runners[item.id] == nil else { return }
+        guard let idx = items.firstIndex(where: { $0.id == item.id }) else { return }
         items[idx].status = .downloading
         let current = items[idx]
-        if current.debridService != nil && current.debridResolved != true {
+        if (current.isMagnet == true || current.isTorrentFile == true) && current.debridResolved != true {
+            Task { await resolveTorrentAndStart(current) }
+        } else if current.debridService != nil && current.debridResolved != true {
             Task { await resolveDebridAndStart(current) }
         } else if !current.probed {
             Task { await probeAndStart(current) }
@@ -204,6 +301,65 @@ final class DownloadManager: ObservableObject {
             startRunner(current)
         }
         updateIdleTimer()
+    }
+
+    /// Magnets and .torrent files: the debrid service fetches the
+    /// torrent on its own servers (cached torrents are quick; fresh
+    /// ones can take minutes, reported through debridPhase), then the
+    /// resulting files download like any other debrid link. There is
+    /// no direct-download fallback for a magnet, so a failure fails
+    /// the item with the service's message.
+    private func resolveTorrentAndStart(_ item: DownloadItem) async {
+        guard let serviceID = DebridServiceID(rawValue: item.debridService ?? "") else {
+            fail(item.id, "Magnets and torrents need a debrid service. Add a TorBox, Premiumize or Real-Debrid key in Settings and tap Test to verify it.")
+            return
+        }
+        guard let idx = items.firstIndex(where: { $0.id == item.id }) else { return }
+        items[idx].debridPhase = "\(serviceID.displayName): preparing torrent"
+        saveState()
+        do {
+            let files: [DebridFile]
+            let onPhase: (String) -> Void = { [weak self] text in
+                Task { @MainActor in
+                    guard let self, let i = self.items.firstIndex(where: { $0.id == item.id }),
+                          self.items[i].status == .downloading else { return }
+                    self.items[i].debridPhase = text
+                }
+            }
+            if item.isMagnet == true {
+                files = try await DebridStore.shared.resolveMagnet(item.urlString, service: serviceID, onPhase: onPhase)
+            } else if let torrentURL = URL(string: item.originalURLString ?? item.urlString) {
+                files = try await DebridStore.shared.resolveTorrentURL(torrentURL, service: serviceID, onPhase: onPhase)
+            } else {
+                throw DebridError.message("The torrent link is not valid.")
+            }
+            guard let idx = items.firstIndex(where: { $0.id == item.id }),
+                  items[idx].status == .downloading else { return } // paused meanwhile
+            items[idx].debridPhase = nil
+            guard let first = files.first else { throw DebridError.message("The torrent contained no files.") }
+            items[idx].urlString = first.directURL.absoluteString
+            if let fn = first.filename, !fn.isEmpty {
+                items[idx].filename = uniqueFilename(sanitizeFilename(fn))
+            }
+            items[idx].debridResolved = true
+            for extra in files.dropFirst() {
+                var extraItem = DownloadItem(
+                    urlString: extra.directURL.absoluteString,
+                    filename: uniqueFilename(sanitizeFilename(extra.filename ?? extra.directURL.lastPathComponent)))
+                extraItem.viaDebrid = serviceID.displayName
+                extraItem.debridService = serviceID.rawValue
+                extraItem.originalURLString = item.originalURLString
+                extraItem.debridResolved = true
+                items.insert(extraItem, at: idx)
+            }
+            saveState()
+            await probeAndStart(items[idx])
+            schedule()
+        } catch {
+            guard let idx = items.firstIndex(where: { $0.id == item.id }) else { return }
+            items[idx].debridPhase = nil
+            fail(item.id, (error as? DebridError)?.errorDescription ?? error.localizedDescription)
+        }
     }
 
     /// Resolves a debrid-routed item's hoster link to direct link(s)
@@ -353,37 +509,46 @@ final class DownloadManager: ObservableObject {
     }
 
     private func startRunner(_ item: DownloadItem) {
-        guard let idx = items.firstIndex(where: { $0.id == item.id }), runners[item.id] == nil,
+        guard let idx = items.firstIndex(where: { $0.id == item.id }), !engineActive.contains(item.id),
               let url = URL(string: item.urlString) else { return }
-        let id = item.id
-        let runner = SegmentRunner(
-            itemID: id, url: url, segments: items[idx].segments, partsDir: partsDir(for: id),
-            onProgress: { [weak self] segs in
-                Task { @MainActor in self?.applyProgress(id: id, segments: segs) }
-            },
-            onFinish: { [weak self] result, segs in
-                Task { @MainActor in self?.applyFinish(id: id, result: result, segments: segs) }
-            })
-        runners[id] = runner
-        runner.start()
+        engineActive.insert(item.id)
+        engine.start(itemID: item.id, url: url, segments: items[idx].segments, partsDir: partsDir(for: item.id))
     }
 
-    private func applyProgress(id: UUID, segments: [SegmentInfo]) {
+    private func applyProgress(id: UUID, segments: [SegmentInfo], liveBytes: Int64) {
         guard let idx = items.firstIndex(where: { $0.id == id }) else { return }
         items[idx].segments = segments
+        items[idx].transientBytes = liveBytes
         progressSaveCounter += 1
         if progressSaveCounter % 20 == 0 { saveState() }
     }
 
     private func applyFinish(id: UUID, result: RunnerResult, segments: [SegmentInfo]) {
-        runners[id] = nil
+        engineActive.remove(id)
         guard let idx = items.firstIndex(where: { $0.id == id }) else { schedule(); return }
         items[idx].segments = segments
+        items[idx].transientBytes = segments.reduce(0) { $0 + $1.downloaded }
         switch result {
         case .paused:
             if items[idx].status == .downloading { items[idx].status = .paused }
             saveState()
         case .failed(let message):
+            // Auto-repair: one automatic retry. For a debrid item the
+            // restart re-resolves first, so an expired direct link
+            // heals itself; anything else simply resumes.
+            if items[idx].autoRetried != true {
+                items[idx].autoRetried = true
+                resetForRestart(idx)
+                items[idx].status = .queued
+                items[idx].errorMessage = nil
+                saveState()
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    self?.schedule()
+                }
+                updateIdleTimer()
+                return
+            }
             items[idx].status = .failed
             items[idx].errorMessage = message
             saveState()
@@ -392,6 +557,7 @@ final class DownloadManager: ObservableObject {
                 // One automatic retry as a clean single-stream download.
                 items[idx].rangeFallbackTried = true
                 items[idx].segments = [SegmentInfo(start: 0, end: items[idx].totalBytes - 1)]
+                items[idx].transientBytes = 0
                 try? FileManager.default.removeItem(at: partsDir(for: id))
                 items[idx].status = .downloading
                 saveState()
@@ -405,7 +571,9 @@ final class DownloadManager: ObservableObject {
             if assemble(item: items[idx]) {
                 items[idx].status = .completed
                 items[idx].errorMessage = nil
+                items[idx].transientBytes = items[idx].totalBytes
                 try? FileManager.default.removeItem(at: partsDir(for: id))
+                notifyCompleted(items[idx])
             } else {
                 items[idx].status = .failed
                 items[idx].errorMessage = "Download finished but the file could not be assembled."
@@ -422,6 +590,41 @@ final class DownloadManager: ObservableObject {
         items[idx].errorMessage = message
         saveState()
         schedule()
+    }
+
+    // MARK: Notifications + shared links
+
+    private func requestNotificationAuthorizationOnce() {
+        guard !notificationAuthRequested else { return }
+        notificationAuthRequested = UserDefaults.standard.bool(forKey: "notifAuthRequested")
+        guard !notificationAuthRequested else { return }
+        notificationAuthRequested = true
+        UserDefaults.standard.set(true, forKey: "notifAuthRequested")
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+    }
+
+    private func notifyCompleted(_ item: DownloadItem) {
+        let content = UNMutableNotificationContent()
+        content.title = "Download complete"
+        content.body = item.filename
+        content.sound = .default
+        let request = UNNotificationRequest(identifier: "done-\(item.id.uuidString)",
+                                            content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request)
+    }
+
+    /// Links handed over by the share extension wait in the App Group
+    /// container; drain them into the queue. Called at launch and
+    /// whenever the app comes to the foreground.
+    func drainSharedLinks() {
+        guard let container = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: "group.com.c12n.downloadmanager") else { return }
+        let file = container.appendingPathComponent("pending-links.json")
+        guard let data = try? Data(contentsOf: file),
+              let links = try? JSONDecoder().decode([String].self, from: data),
+              !links.isEmpty else { return }
+        try? FileManager.default.removeItem(at: file)
+        addURLs(text: links.joined(separator: "\n"), customFilename: "")
     }
 
     /// Concatenate part files in segment order into Documents/Downloads.
@@ -457,7 +660,7 @@ final class DownloadManager: ObservableObject {
         let now = Date()
         for i in items.indices {
             let id = items[i].id
-            let bytes = items[i].downloadedBytes
+            let bytes = items[i].effectiveDownloaded
             if items[i].status == .downloading, let prev = speedSamples[id] {
                 let dt = now.timeIntervalSince(prev.time)
                 if dt > 0.4 {
