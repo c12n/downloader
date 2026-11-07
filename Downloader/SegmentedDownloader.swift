@@ -189,7 +189,7 @@ final class BackgroundDownloadEngine: NSObject, URLSessionDownloadDelegate {
         delegateQueue.addOperation { [weak self] in
             guard let self else { return }
             let key = itemID.uuidString
-            let taskIDs = Set(self.manifest[key]?.tasks.keys ?? [])
+            let taskIDs = Set((self.manifest[key]?.tasks ?? [:]).keys)
             self.manifest.removeValue(forKey: key)
             self.runs.removeValue(forKey: itemID)
             self.saveManifest()
@@ -311,7 +311,7 @@ final class BackgroundDownloadEngine: NSObject, URLSessionDownloadDelegate {
     private func failRun(_ itemID: UUID, _ result: RunnerResult) {
         // Cancel any sibling tasks, then finish with the result.
         let key = itemID.uuidString
-        let taskIDs = Set(manifest[key]?.tasks.keys ?? [])
+        let taskIDs = Set((manifest[key]?.tasks ?? [:]).keys)
         manifest[key]?.tasks = [:]
         saveManifest()
         if !taskIDs.isEmpty {
@@ -329,7 +329,7 @@ final class BackgroundDownloadEngine: NSObject, URLSessionDownloadDelegate {
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
                     didWriteData bytesWritten: Int64, totalBytesWritten: Int64,
                     totalBytesExpectedToWrite: Int64) {
-        guard let (itemID, record) = record(for: downloadTask) else { return }
+        guard let (itemID, _) = record(for: downloadTask) else { return }
         touchedItems.insert(itemID)
         runs[itemID]?.liveWritten[downloadTask.taskIdentifier] = totalBytesWritten
         guard var run = runs[itemID] else { return }
@@ -416,13 +416,13 @@ final class BackgroundDownloadEngine: NSObject, URLSessionDownloadDelegate {
         let key = itemID.uuidString
         guard var entry = manifest[key] else { return }
         // Success was already accounted in didFinishDownloadingTo.
-        if error == nil { return }
+        guard let error else { return }
         let ns = error as NSError
         // Keep any resume data the system offers so a later resume
         // continues this segment instead of restarting it.
         if let data = ns.userInfo[NSURLSessionDownloadTaskResumeData] as? Data {
             let partsDir = runs[itemID]?.partsDir ?? partsDir(for: itemID)
-            try? data.write(to: resumeURL(partsDir, record.segment), options: .atomic)
+            try? data.write(to: resumeURL(partsDir, record.segment), options: [.atomic])
         }
         entry.tasks.removeValue(forKey: String(task.taskIdentifier))
         manifest[key] = entry
@@ -438,7 +438,7 @@ final class BackgroundDownloadEngine: NSObject, URLSessionDownloadDelegate {
             if entry.tasks.isEmpty { finishRun(itemID, .paused) }
             return
         }
-        failRun(itemID, .failed(error?.localizedDescription ?? "Download failed."))
+        failRun(itemID, .failed(error.localizedDescription))
     }
 
     func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
