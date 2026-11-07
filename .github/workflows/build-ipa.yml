@@ -6,6 +6,7 @@ on:
     paths:
       - 'Downloader/**'
       - 'Downloader.xcodeproj/**'
+      - 'ShareExtension/**'
       - '.github/workflows/build-ipa.yml'
   pull_request:
     branches: [ main ]
@@ -15,7 +16,6 @@ jobs:
   build:
     name: Build unsigned IPA
     runs-on: macos-26
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -45,10 +45,13 @@ jobs:
           APP_PATH="$RUNNER_TEMP/build/Release-iphoneos/Downloader.app"
           test -d "$APP_PATH"
           test -f "$APP_PATH/adblock-rules.json"
+          test -d "$APP_PATH/PlugIns/ShareExtension.appex"
           /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP_PATH/Info.plist"
           /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP_PATH/Info.plist"
           /usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP_PATH/Info.plist"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Info.plist")" = "com.c12n.downloadmanager"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Info.plist")" = "com.c12n.Downloader"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Info.plist")" = "1.3.0"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_PATH/Info.plist")" = "1"
 
       - name: Package IPA
         run: |
