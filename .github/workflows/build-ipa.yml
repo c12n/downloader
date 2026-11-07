@@ -1,0 +1,67 @@
+name: Build IPA
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'Downloader/**'
+      - 'Downloader.xcodeproj/**'
+      - '.github/workflows/build-ipa.yml'
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build unsigned IPA
+    runs-on: macos-26
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Build (no code signing)
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project Downloader.xcodeproj \
+            -target Downloader \
+            -configuration Release \
+            -sdk iphoneos \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            SYMROOT="$RUNNER_TEMP/build" \
+            OBJROOT="$RUNNER_TEMP/build-intermediates" \
+            build
+
+      - name: Verify app bundle
+        run: |
+          set -euo pipefail
+          APP_PATH="$RUNNER_TEMP/build/Release-iphoneos/Downloader.app"
+          test -d "$APP_PATH"
+          test -f "$APP_PATH/adblock-rules.json"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP_PATH/Info.plist"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP_PATH/Info.plist"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP_PATH/Info.plist"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Info.plist")" = "com.c12n.downloadmanager"
+
+      - name: Package IPA
+        run: |
+          set -euo pipefail
+          APP_PATH="$RUNNER_TEMP/build/Release-iphoneos/Downloader.app"
+          mkdir -p Payload build-artifacts
+          cp -R "$APP_PATH" Payload/
+          zip -qry "build-artifacts/Downloader.ipa" Payload
+          ls -lh build-artifacts/Downloader.ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Downloader-IPA
+          path: build-artifacts/Downloader.ipa
+          if-no-files-found: error
