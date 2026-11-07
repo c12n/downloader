@@ -1,0 +1,252 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		E00000000000000000000001 /* DownloaderApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000001 /* DownloaderApp.swift */; };
+		E00000000000000000000002 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000002 /* Models.swift */; };
+		E00000000000000000000003 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000003 /* ContentView.swift */; };
+		E00000000000000000000004 /* DownloadManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000004 /* DownloadManager.swift */; };
+		E00000000000000000000005 /* SegmentedDownloader.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000005 /* SegmentedDownloader.swift */; };
+		E00000000000000000000006 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000006 /* SettingsView.swift */; };
+		E00000000000000000000008 /* AppIcon60x60@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000008 /* AppIcon60x60@2x.png */; };
+		E00000000000000000000011 /* AppIcon60x60@3x.png in Resources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000011 /* AppIcon60x60@3x.png */; };
+		E00000000000000000000012 /* AppIcon1024.png in Resources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000012 /* AppIcon1024.png */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		D00000000000000000000001 /* DownloaderApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloaderApp.swift; sourceTree = "<group>"; };
+		D00000000000000000000002 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		D00000000000000000000003 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		D00000000000000000000004 /* DownloadManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadManager.swift; sourceTree = "<group>"; };
+		D00000000000000000000005 /* SegmentedDownloader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SegmentedDownloader.swift; sourceTree = "<group>"; };
+		D00000000000000000000006 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		D00000000000000000000008 /* AppIcon60x60@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "AppIcon60x60@2x.png"; sourceTree = "<group>"; };
+		D00000000000000000000011 /* AppIcon60x60@3x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "AppIcon60x60@3x.png"; sourceTree = "<group>"; };
+		D00000000000000000000012 /* AppIcon1024.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = AppIcon1024.png; sourceTree = "<group>"; };
+		D00000000000000000000010 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		555555555555555555555555 /* Downloader.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Downloader.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		BBBBBBBBBBBBBBBBBBBBBBBB /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		222222222222222222222222 = {
+			isa = PBXGroup;
+			children = (
+				333333333333333333333333 /* Downloader */,
+				444444444444444444444444 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		333333333333333333333333 /* Downloader */ = {
+			isa = PBXGroup;
+			children = (
+				D00000000000000000000001 /* DownloaderApp.swift */,
+				D00000000000000000000002 /* Models.swift */,
+				D00000000000000000000003 /* ContentView.swift */,
+				D00000000000000000000004 /* DownloadManager.swift */,
+				D00000000000000000000005 /* SegmentedDownloader.swift */,
+				D00000000000000000000006 /* SettingsView.swift */,
+				D00000000000000000000010 /* Info.plist */,
+				D00000000000000000000008 /* AppIcon60x60@2x.png */,
+				D00000000000000000000011 /* AppIcon60x60@3x.png */,
+				D00000000000000000000012 /* AppIcon1024.png */,
+			);
+			path = Downloader;
+			sourceTree = "<group>";
+		};
+		444444444444444444444444 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				555555555555555555555555 /* Downloader.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		666666666666666666666666 /* Downloader */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 888888888888888888888888 /* Build configuration list for PBXNativeTarget "Downloader" */;
+			buildPhases = (
+				AAAAAAAAAAAAAAAAAAAAAAAA /* Sources */,
+				BBBBBBBBBBBBBBBBBBBBBBBB /* Frameworks */,
+				CCCCCCCCCCCCCCCCCCCCCCCC /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = Downloader;
+			productName = Downloader;
+			productReference = 555555555555555555555555 /* Downloader.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		111111111111111111111111 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1500;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+					666666666666666666666666 = {
+						CreatedOnToolsVersion = 15.0;
+					};
+				};
+			};
+			buildConfigurationList = 777777777777777777777777 /* Build configuration list for PBXProject "Downloader" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 222222222222222222222222;
+			productRefGroup = 444444444444444444444444 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				666666666666666666666666 /* Downloader */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		CCCCCCCCCCCCCCCCCCCCCCCC /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E00000000000000000000008 /* AppIcon60x60@2x.png in Resources */,
+				E00000000000000000000011 /* AppIcon60x60@3x.png in Resources */,
+				E00000000000000000000012 /* AppIcon1024.png in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		AAAAAAAAAAAAAAAAAAAAAAAA /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E00000000000000000000001 /* DownloaderApp.swift in Sources */,
+				E00000000000000000000002 /* Models.swift in Sources */,
+				E00000000000000000000003 /* ContentView.swift in Sources */,
+				E00000000000000000000004 /* DownloadManager.swift in Sources */,
+				E00000000000000000000005 /* SegmentedDownloader.swift in Sources */,
+				E00000000000000000000006 /* SettingsView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		999999999999999999999991 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		999999999999999999999992 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		999999999999999999999993 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = QD29U585ZA;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Downloader/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.c12n.downloadmanager;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = iphoneos;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		999999999999999999999994 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = QD29U585ZA;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Downloader/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.c12n.downloadmanager;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = iphoneos;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		777777777777777777777777 /* Build configuration list for PBXProject "Downloader" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				999999999999999999999991 /* Debug */,
+				999999999999999999999992 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		888888888888888888888888 /* Build configuration list for PBXNativeTarget "Downloader" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				999999999999999999999993 /* Debug */,
+				999999999999999999999994 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 111111111111111111111111 /* Project object */;
+}
