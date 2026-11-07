@@ -222,7 +222,7 @@ final class BackgroundDownloadEngine: NSObject, URLSessionDownloadDelegate {
     /// through the normal callbacks. Returns nil when the engine has
     /// nothing for this item (orphaned state; the manager pauses it).
     func attach(itemID: UUID, segments: [SegmentInfo], partsDir: URL) -> RunnerResult? {
-        onQueue { attachOnQueue(itemID: itemID, segments: segments, partsDir: partsDir) }
+        onQueue { self.attachOnQueue(itemID: itemID, segments: segments, partsDir: partsDir) }
     }
 
     private func attachOnQueue(itemID: UUID, segments: [SegmentInfo], partsDir: URL) -> RunnerResult? {
@@ -248,12 +248,12 @@ final class BackgroundDownloadEngine: NSObject, URLSessionDownloadDelegate {
 
     /// The freshest segment state the engine has for an item.
     func segments(for itemID: UUID) -> [SegmentInfo]? {
-        onQueue { manifest[itemID.uuidString]?.segments }
+        onQueue { self.manifest[itemID.uuidString]?.segments }
     }
 
     func hasLiveWork(for itemID: UUID) -> Bool {
         onQueue {
-            guard let entry = manifest[itemID.uuidString] else { return false }
+            guard let entry = self.manifest[itemID.uuidString] else { return false }
             return !entry.tasks.isEmpty || entry.pendingResult != nil
         }
     }
