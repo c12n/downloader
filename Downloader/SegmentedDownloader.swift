@@ -207,7 +207,7 @@ final class BackgroundDownloadEngine: NSObject, URLSessionDownloadDelegate {
 
     /// Runs work on the delegate queue (where all manifest access
     /// belongs) and returns its result, for callers on other threads.
-    private func onQueue<T>(_ work: () -> T) -> T {
+    private func onQueue<T>(_ work: @escaping () -> T) -> T {
         if OperationQueue.current === delegateQueue { return work() }
         var out: T!
         let sem = DispatchSemaphore(value: 0)
